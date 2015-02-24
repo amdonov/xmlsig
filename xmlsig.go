@@ -1,8 +1,5 @@
 package xmlsig
 
-//#cgo pkg-config: libxml-2.0
-//#include "xmlsig.h"
-import "C"
 import ("io"
     "crypto/rsa"
     "errors"
@@ -10,122 +7,22 @@ import ("io"
     "encoding/pem"
     "crypto/x509"
     "encoding/base64"
-    "unsafe"
     "bytes"
-    "reflect"
     "crypto/sha1"
     "crypto/rand"
     "crypto"
-    "text/template"
-    "bufio")
-
-func Initialize() {
-    C.init()
-}
-
-func Terminate() {
-    C.xmlCleanupParser()
-}
+    "bufio"
+    "encoding/xml"
+    "fmt"
+    "sort")
 
 type Signer interface {
-    Sign(io.Reader, string) (*XML, error)
+    Sign(interface{}) (*Signature, error)
 }
 
 type signer struct {
     cert string
     key *rsa.PrivateKey
-}
-
-func (s *signer) Sign(xml io.Reader, id string) (*XML, error) {
-    // Read the XML into memory
-    doc, err := readXML(xml)
-    if err!=nil {
-        return nil, err
-    }
-    defer C.xmlFreeDoc(doc)
-    root := C.xmlDocGetRootElement(doc)
-    if root==nil {
-        return nil, errors.New("Document missing root element.")
-    }
-    // Find the node with the referenced id
-    reference := findElementByID(root, id)
-    if reference==nil {
-        return nil, errors.New("Failed to find element with ID="+id)
-    }
-    // Canonicalize the node
-    refData, err := canonicalize(&reference)
-    if err!=nil {
-        return nil, err
-    }
-    defer refData.Free()
-    // Calculate the digest
-    dataDigest := digest(refData)
-    // Create a document containing the signature template
-    sigTemplate, err := newSignatureTemplate(id, s.cert)
-    if err!=nil {
-        return nil, err
-    }
-    sigDoc, err := readXML(sigTemplate)
-    sigNode := C.xmlDocGetRootElement(sigDoc)
-    // Set the digest value
-    digestNode := findElementByName(sigNode, "DigestValue", "http://www.w3.org/2000/09/xmldsig#")
-    C.xmlNodeSetContent(digestNode, xmlFromstr(dataDigest))
-    // Canonicalize the signature info
-    infoNode := findElementByName(sigNode, "SignedInfo", "http://www.w3.org/2000/09/xmldsig#")
-    if infoNode==nil {
-        return nil, errors.New("Failed to find SignedInfo element.")
-
-    }
-    infoData, err := canonicalize(&infoNode)
-    if err!=nil {
-        return nil, err
-    }
-    defer infoData.Free()
-    // Sign the signature info
-    infoSignature, err := sign(s.key, infoData)
-    if err!=nil {
-        return nil, err
-    }
-    // Set the signature value
-    valueNode := findElementByName(sigNode, "SignatureValue", "http://www.w3.org/2000/09/xmldsig#")
-    if valueNode ==nil {
-        return nil, errors.New("Failed to find SignatureValue element.")
-    }
-    C.xmlNodeSetContent(valueNode, xmlFromstr(infoSignature))
-    // Append the signature to the document
-    signatureCopy := C.xmlDocCopyNode(sigNode, doc, 1)
-    C.xmlAddChild(reference, signatureCopy)
-    // Return the signed document
-    var signedDoc *C.xmlChar
-    var size C.int
-    C.xmlDocDumpMemory(doc, &signedDoc, &size)
-    return newXML(signedDoc, size), nil
-}
-
-func sign(key *rsa.PrivateKey, data io.Reader) (string, error) {
-    h := sha1.New()
-    io.Copy(h, data)
-    sum := h.Sum(nil)
-    sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA1, sum)
-    if err!=nil {
-        return "", err
-    }
-    return base64.StdEncoding.EncodeToString(sig), nil
-}
-
-func digest(xml io.Reader) string {
-    h := sha1.New()
-    io.Copy(h, xml)
-    sum := h.Sum(nil)
-    return base64.StdEncoding.EncodeToString(sum)
-}
-
-func (s *signer) getSignatureDoc(id string) (C.xmlDocPtr, error) {
-    templ, err := newSignatureTemplate(id, s.cert)
-    if err!=nil {
-        return nil, err
-    }
-    return readXML(templ)
 }
 
 func NewSigner(key io.Reader, cert io.Reader) (Signer, error) {
@@ -162,149 +59,185 @@ func readPEM(pemReader io.Reader) (*pem.Block, error) {
     return decodedPem, nil
 }
 
-// Helper to go from libxml2's xmlChar to string
-func strFromXml(text *C.xmlChar) string {
-    return C.GoString((*C.char)(unsafe.Pointer(text)))
+type Signature struct {
+    XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# Signature"`
+    SignedInfo SignedInfo
+    SignatureValue string `xml:"http://www.w3.org/2000/09/xmldsig# SignatureValue"`
+    KeyInfo KeyInfo
 }
 
-// Helper to go from string to libxml2's xmlChar. Should be freed.
-func xmlFromstr(text string) *C.xmlChar {
-    return (*C.xmlChar)(unsafe.Pointer(C.CString(text)))
+type Algorithm struct {
+    Algorithm string `xml:",attr"`
 }
 
-// Walks an element trying to match a node that satisfies the checker function
-func findElement(parent C.xmlNodePtr, checker func(C.xmlNodePtr) C.xmlNodePtr) C.xmlNodePtr {
-    cur := parent
-    for cur!=nil {
-        if res := checker(cur); res!=nil {
-            return res
-        }
-        if cur.children !=nil {
-            ret := findElement(cur.children, checker)
-            if ret!=nil {
-                return ret
+type SignedInfo struct {
+    XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# SignedInfo"`
+    CanonicalizationMethod Algorithm `xml:"http://www.w3.org/2000/09/xmldsig# CanonicalizationMethod"`
+    SignatureMethod Algorithm `xml:"http://www.w3.org/2000/09/xmldsig# SignatureMethod"`
+    Reference Reference
+}
+
+type Reference struct {
+    XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# Reference"`
+    URI string `xml:",attr,omitempty"`
+    Transforms Transforms
+    DigestMethod Algorithm `xml:"http://www.w3.org/2000/09/xmldsig# DigestMethod"`
+    DigestValue string `xml:"http://www.w3.org/2000/09/xmldsig# DigestValue"`
+}
+
+type Transforms struct {
+    XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# Transforms"`
+    Transform []Algorithm `xml:"http://www.w3.org/2000/09/xmldsig# Transform"`
+}
+
+type KeyInfo  struct {
+    XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# KeyInfo"`
+    X509Data X509Data
+}
+
+type X509Data struct {
+    XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# X509Data"`
+    X509Certificate string `xml:"http://www.w3.org/2000/09/xmldsig# X509Certificate"`
+}
+
+func (s *signer) Sign(data interface{}) (*Signature, error) {
+    signature := newSignature()
+    // canonicalize the Item
+    canonData, id, err := canonicalize(data)
+    if err!=nil {
+        return nil, err
+    }
+    if id!="" {
+        signature.SignedInfo.Reference.URI="#"+id
+    }
+    // calculate the digest
+    digest := digest(canonData)
+    signature.SignedInfo.Reference.DigestValue = digest
+    // canonicalize the SignedInfo
+    canonData, _, err=canonicalize(signature.SignedInfo)
+    if err!=nil {
+        return nil, err
+    }
+    sig, err := sign(s.key, canonData)
+    if err!=nil {
+        return nil, err
+    }
+    signature.SignatureValue = sig
+    signature.KeyInfo.X509Data.X509Certificate = s.cert
+    return signature, nil
+}
+
+func sign(key *rsa.PrivateKey, data []byte) (string, error) {
+    h := sha1.New()
+    h.Write(data)
+    sum := h.Sum(nil)
+    sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA1, sum)
+    if err!=nil {
+        return "", err
+    }
+    return base64.StdEncoding.EncodeToString(sig), nil
+}
+
+func newSignature() *Signature {
+    signature := &Signature{}
+    signature.SignedInfo.CanonicalizationMethod.Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
+    signature.SignedInfo.SignatureMethod.Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"
+    transforms := &signature.SignedInfo.Reference.Transforms.Transform
+    *transforms = append(*transforms, Algorithm{"http://www.w3.org/2000/09/xmldsig#enveloped-signature"})
+    *transforms = append(*transforms, Algorithm{"http://www.w3.org/2001/10/xml-exc-c14n#"})
+    signature.SignedInfo.Reference.DigestMethod.Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"
+    return signature
+}
+
+func digest(data []byte) string {
+    h := sha1.New()
+    h.Write(data)
+    sum := h.Sum(nil)
+    return base64.StdEncoding.EncodeToString(sum)
+}
+
+func canonicalize(data interface{}) ([]byte, string, error) {
+    // write the item to a buffer
+    var buffer, out bytes.Buffer
+    writer := bufio.NewWriter(&buffer)
+    encoder := xml.NewEncoder(writer)
+    encoder.Encode(data)
+    encoder.Flush()
+    // read it back in
+    decoder := xml.NewDecoder(bytes.NewReader(buffer.Bytes()))
+    stack := &Stack{}
+    outWriter := bufio.NewWriter(&out)
+    firstElem := true
+    id := ""
+    writeStartElement := func(writer io.Writer, start xml.StartElement) {
+        fmt.Fprintf(writer, "<%s", start.Name.Local)
+        sort.Sort(CanonAtt(start.Attr))
+        currentNs, err := stack.Top()
+        if err!=nil {
+            // No namespaces yet declare ours
+            fmt.Fprintf(writer, " %s=\"%s\"", "xmlns", start.Name.Space)
+        }else {
+            // Different namespace declare ours
+            if currentNs!=start.Name.Space {
+                fmt.Fprintf(writer, " %s=\"%s\"", "xmlns", start.Name.Space)
             }
         }
-        cur = cur.next
+        stack.Push(start.Name.Space)
+        for i := range (start.Attr) {
+            if "xmlns" != start.Attr[i].Name.Local {
+                fmt.Fprintf(writer, " %s=\"%s\"", start.Attr[i].Name.Local, start.Attr[i].Value)
+            }
+        }
+        fmt.Fprint(writer, ">")
     }
-    return nil
-}
-
-func findElementByID(parent C.xmlNodePtr, id string) C.xmlNodePtr {
-    // value of XML_ELEMENT_NODE
-    elementType := C.xmlElementType(1)
-    return findElement(parent, func(node C.xmlNodePtr) C.xmlNodePtr {
-        idAtt := xmlFromstr("ID")
-        defer C.free(unsafe.Pointer(idAtt))
-        if node._type == elementType {
-            // Found an element look at the attributes
-            if idVal := C.xmlGetNoNsProp(node, idAtt); idVal!=nil {
-                val := strFromXml(idVal)
-                if id==val {
-                    return node
+    for {
+        token, err := decoder.Token()
+        if err != nil {
+            break
+        }
+        switch t := token.(type) {
+            case xml.StartElement:
+            // Check the first element for an ID to include in the reference
+            if firstElem {
+                firstElem = false
+                for i := range (t.Attr) {
+                    if "ID"==t.Attr[i].Name.Local {
+                        id = t.Attr[i].Value
+                    }
                 }
             }
+            writeStartElement(outWriter, t)
+
+            case xml.EndElement:
+            stack.Pop()
+            fmt.Fprintf(outWriter, "</%s>", t.Name.Local)
+
+            case xml.CharData:
+            outWriter.Write(t)
         }
-        return nil
-    })
+    }
+    outWriter.Flush()
+    return out.Bytes(), id, nil
 }
 
-func findElementByName(parent C.xmlNodePtr, name string, ns string) C.xmlNodePtr {
-    // value of XML_ELEMENT_NODE
-    elementType := C.xmlElementType(1)
-    return findElement(parent, func(node C.xmlNodePtr) C.xmlNodePtr {
-        // TODO check the namespace
-        if node._type == elementType {
-            eName := strFromXml(node.name)
-            if eName == name {
-                return node
-            }
-        }
-        return nil
-    })
+type CanonAtt []xml.Attr
+
+func (att CanonAtt) Len() int {
+    return len(att)
 }
 
-func readXML(xml io.Reader) (C.xmlDocPtr, error) {
-    if xml == nil {
-        return nil, errors.New("No XML provided.")
-    }
-    xmlData, err := ioutil.ReadAll(xml)
-    if err!=nil {
-        return nil, err
-    }
-    size := C.int(len(xmlData))
-    if size<1 {
-        return nil, errors.New("Failed to read XML.")
-    }
-    doc := C.xmlParseMemory((*C.char)(unsafe.Pointer(&xmlData[0])), size)
-    if doc == nil {
-        return nil, errors.New("Failed to parse XML.")
-    }
-    return doc, nil
+func (att CanonAtt) Swap(i, j int) {
+    att[i], att[j] = att[j], att[i]
 }
 
-type XML struct {
-    io.Reader
-    data *C.xmlChar
-}
-
-// I found that I had to use the pointer to work properly
-func canonicalize(node *C.xmlNodePtr) (*XML, error) {
-    // Make a new document an copy the node to it.
-    // TODO work on doing this without making a copy
-    version := xmlFromstr("1.0")
-    defer C.free(unsafe.Pointer(version))
-    doc := C.xmlNewDoc(version)
-    defer C.xmlFreeDoc(doc)
-    if *node==nil {
-        return nil, errors.New("Source node was null.")
+func (att CanonAtt) Less(i, j int) bool {
+    iName := att[i].Name.Local
+    jName := att[j].Name.Local
+    if iName=="xmlns" {
+        return true
     }
-    rootNode := C.xmlDocCopyNode(*node, doc, 1)
-    if rootNode==nil {
-        return nil, errors.New("XML Copy did not return any nodes.")
+    if jName=="xmlns" {
+        return false
     }
-    C.xmlDocSetRootElement(doc, rootNode)
-    var res *C.xmlChar
-    size := C.canonicalize(doc, &res)
-    if size==0 {
-        return nil, errors.New("Canonicalization didn't return any data.")
-    }
-    return newXML(res, size), nil
-}
-
-func newXML(data *C.xmlChar, size C.int) *XML {
-    // Create a byte[] slice of the data
-    hdr := reflect.SliceHeader{
-        Data: uintptr(unsafe.Pointer(data)),
-        Len:  int(size),
-        Cap:  int(size),
-    }
-    xmlBytes := *(*[]byte)(unsafe.Pointer(&hdr))
-    return &XML{bytes.NewReader(xmlBytes), data}
-}
-
-// Decided to manage memory explicitly rather than use a runtime finalizer
-func (xml *XML) Free() {
-    C.free(unsafe.Pointer(xml.data))
-}
-
-type signatureData struct {
-    Id string
-    Cert string
-}
-
-// Given a certificate and node ID, returns the XML fragment for the Signature block
-func newSignatureTemplate(id string, cert string) (io.Reader, error) {
-    t := template.New("signature")
-    t.Parse(`<Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>
-    <Reference URI="#{{ .Id }}"><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/><Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue></DigestValue></Reference></SignedInfo><SignatureValue></SignatureValue><KeyInfo>
-    <X509Data><X509Certificate>{{ .Cert }}</X509Certificate></X509Data></KeyInfo></Signature>`)
-    var buffer bytes.Buffer
-    writer := bufio.NewWriter(&buffer)
-    err := t.Execute(writer, signatureData{id, cert})
-    if err!=nil {
-        return nil, err
-    }
-    writer.Flush()
-    return bytes.NewReader(buffer.Bytes()), nil
+    return att[i].Name.Local < att[j].Name.Local
 }
