@@ -174,13 +174,13 @@ func canonicalize(data interface{}) ([]byte, string, error) {
     encoder.Flush()
     // read it back in
     decoder := xml.NewDecoder(bytes.NewReader(buffer.Bytes()))
-    stack := &Stack{}
+    stack := &stack{}
     outWriter := bufio.NewWriter(&out)
     firstElem := true
     id := ""
     writeStartElement := func(writer io.Writer, start xml.StartElement) {
         fmt.Fprintf(writer, "<%s", start.Name.Local)
-        sort.Sort(CanonAtt(start.Attr))
+        sort.Sort(canonAtt(start.Attr))
         currentNs, err := stack.Top()
         if err!=nil {
             // No namespaces yet declare ours
@@ -229,17 +229,17 @@ func canonicalize(data interface{}) ([]byte, string, error) {
     return out.Bytes(), id, nil
 }
 
-type CanonAtt []xml.Attr
+type canonAtt []xml.Attr
 
-func (att CanonAtt) Len() int {
+func (att canonAtt) Len() int {
     return len(att)
 }
 
-func (att CanonAtt) Swap(i, j int) {
+func (att canonAtt) Swap(i, j int) {
     att[i], att[j] = att[j], att[i]
 }
 
-func (att CanonAtt) Less(i, j int) bool {
+func (att canonAtt) Less(i, j int) bool {
     iName := att[i].Name.Local
     jName := att[j].Name.Local
     if iName=="xmlns" {
