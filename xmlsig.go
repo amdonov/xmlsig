@@ -1,3 +1,4 @@
+// Package xmlsig supports add XML Digital Signatures to Go structs marshalled to XML.
 package xmlsig
 
 import ("io"
@@ -16,6 +17,7 @@ import ("io"
     "fmt"
     "sort")
 
+// Used to create a Signature for the provided object.	
 type Signer interface {
     Sign(interface{}) (*Signature, error)
 }
@@ -25,6 +27,8 @@ type signer struct {
     key *rsa.PrivateKey
 }
 
+// Create a new Signer with the provided key and certificate. Key is used to create the signature.
+// The certificate added to the Signature's keyinfo
 func NewSigner(key io.Reader, cert io.Reader) (Signer, error) {
     // We're going to use the key for signing, but the cert is just for including in the signature block.
     // Store it as a string.
@@ -59,6 +63,7 @@ func readPEM(pemReader io.Reader) (*pem.Block, error) {
     return decodedPem, nil
 }
 
+// An XML Signature.
 type Signature struct {
     XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# Signature"`
     SignedInfo SignedInfo
@@ -66,10 +71,12 @@ type Signature struct {
     KeyInfo KeyInfo
 }
 
+// An algorithm used when creating the signature.
 type Algorithm struct {
     Algorithm string `xml:",attr"`
 }
 
+// Information about the Signature used for verification.
 type SignedInfo struct {
     XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# SignedInfo"`
     CanonicalizationMethod Algorithm `xml:"http://www.w3.org/2000/09/xmldsig# CanonicalizationMethod"`
@@ -77,6 +84,7 @@ type SignedInfo struct {
     Reference Reference
 }
 
+// Reference to the signed node.
 type Reference struct {
     XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# Reference"`
     URI string `xml:",attr,omitempty"`
@@ -85,6 +93,7 @@ type Reference struct {
     DigestValue string `xml:"http://www.w3.org/2000/09/xmldsig# DigestValue"`
 }
 
+// Transforms applied that should be applied to the document prior to signature verification.
 type Transforms struct {
     XMLName xml.Name `xml:"http://www.w3.org/2000/09/xmldsig# Transforms"`
     Transform []Algorithm `xml:"http://www.w3.org/2000/09/xmldsig# Transform"`
