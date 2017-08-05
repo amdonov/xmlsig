@@ -1,4 +1,4 @@
-I wrote this to sign XML documents produced by using Go's default XML encoder. It's not capable of signing arbitrary XML. More examples and documentation will follow, but the following example shows how to produce a simple signature.
+I wrote this to sign XML documents produced by using Go's default XML encoder. It's not capable of signing arbitrary XML. The following example shows how to produce a simple signature.
 
     import ("github.com/amdonov/xmlsig"
         "os"
