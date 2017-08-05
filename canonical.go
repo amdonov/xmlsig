@@ -9,6 +9,11 @@ import (
 	"sort"
 )
 
+/* canonicalize produces canonical XML when marshalling the data structure
+provided as data. Go's xml encoder generates something that's pretty close,
+but it repeats namespace declarations for each element which isn't correct.
+It also doesn't sort attribute names.
+*/
 func canonicalize(data interface{}) ([]byte, string, error) {
 	// write the item to a buffer
 	var buffer, out bytes.Buffer
@@ -18,14 +23,14 @@ func canonicalize(data interface{}) ([]byte, string, error) {
 	encoder.Flush()
 	// read it back in
 	decoder := xml.NewDecoder(bytes.NewReader(buffer.Bytes()))
-	stack := &stack{}
+	namespaces := &stack{}
 	outWriter := bufio.NewWriter(&out)
 	firstElem := true
 	id := ""
 	writeStartElement := func(writer io.Writer, start xml.StartElement) {
 		fmt.Fprintf(writer, "<%s", start.Name.Local)
 		sort.Sort(canonAtt(start.Attr))
-		currentNs, err := stack.Top()
+		currentNs, err := namespaces.Top()
 		if err != nil {
 			// No namespaces yet declare ours
 			fmt.Fprintf(writer, " %s=\"%s\"", "xmlns", start.Name.Space)
@@ -35,10 +40,24 @@ func canonicalize(data interface{}) ([]byte, string, error) {
 				fmt.Fprintf(writer, " %s=\"%s\"", "xmlns", start.Name.Space)
 			}
 		}
-		stack.Push(start.Name.Space)
-		for i := range start.Attr {
-			if "xmlns" != start.Attr[i].Name.Local {
-				fmt.Fprintf(writer, " %s=\"%s\"", start.Attr[i].Name.Local, start.Attr[i].Value)
+		namespaces.Push(start.Name.Space)
+		nsmap := make(map[string]string)
+		for _, att := range start.Attr {
+			// Skip xmlns declarations they're handled above
+			if "xmlns" == att.Name.Local {
+				continue
+			}
+			// is this a declaration for an attribute namespace
+			if "xmlns" == att.Name.Space {
+				fmt.Fprintf(writer, " xmlns:%s=\"%s\"", att.Name.Local, att.Value)
+				nsmap[att.Value] = att.Name.Local
+				continue
+			}
+			// is attribute namespaced?
+			if att.Name.Space == "" {
+				fmt.Fprintf(writer, " %s=\"%s\"", att.Name.Local, att.Value)
+			} else {
+				fmt.Fprintf(writer, " %s:%s=\"%s\"", nsmap[att.Name.Space], att.Name.Local, att.Value)
 			}
 		}
 		fmt.Fprint(writer, ">")
@@ -62,7 +81,7 @@ func canonicalize(data interface{}) ([]byte, string, error) {
 			writeStartElement(outWriter, t)
 
 		case xml.EndElement:
-			stack.Pop()
+			namespaces.Pop()
 			fmt.Fprintf(outWriter, "</%s>", t.Name.Local)
 
 		case xml.CharData:
@@ -73,24 +92,44 @@ func canonicalize(data interface{}) ([]byte, string, error) {
 	return out.Bytes(), id, nil
 }
 
+// Attributes must be sorted as part of canonicalization. This type implements sort.Interface for a slice of xml.Attr.
 type canonAtt []xml.Attr
 
+// Len is part of sort.Interface.
 func (att canonAtt) Len() int {
 	return len(att)
 }
 
+// Swap is part of sort.Interface.
 func (att canonAtt) Swap(i, j int) {
 	att[i], att[j] = att[j], att[i]
 }
 
+// Less is part of sort.Interface.
 func (att canonAtt) Less(i, j int) bool {
-	iName := att[i].Name.Local
-	jName := att[j].Name.Local
-	if iName == "xmlns" {
+	iName := att[i].Name
+	jName := att[j].Name
+	// xmlns without prefix goes first
+	if iName.Local == "xmlns" {
 		return true
 	}
-	if jName == "xmlns" {
+	if jName.Local == "xmlns" {
 		return false
 	}
-	return att[i].Name.Local < att[j].Name.Local
+	// namespace declarations go next sorted by prefix
+	if iName.Space == "xmlns" {
+		if jName.Space != "xmlns" {
+			return true
+		}
+		return iName.Local < jName.Local
+	}
+	if jName.Space == "xmlns" {
+		// we know iName Space isn't xmlns
+		return false
+	}
+	// Lastly sort by attribute name namespace first
+	if iName.Space != jName.Space {
+		return iName.Space < jName.Space
+	}
+	return iName.Local < jName.Local
 }
