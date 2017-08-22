@@ -4,63 +4,56 @@ package xmlsig
 import (
 	"crypto"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/pem"
-	"errors"
-	"io"
-	"io/ioutil"
+	"fmt"
 )
 
 // Signer is used to create a Signature for the provided object.
 type Signer interface {
-	Sign(interface{}) (*Signature, error)
+	Sign([]byte) (string, error)
+	CreateSignature(interface{}) (*Signature, error)
+	Algorithm() string
 }
 
 type signer struct {
-	cert string
-	key  *rsa.PrivateKey
+	cert      string
+	algorithm string
+	key       crypto.Signer
 }
 
-// NewSigner creates a new Signer with the provided key and certificate. Key is used to create the signature. The certificate added to the Signature's keyinfo
-func NewSigner(key io.Reader, cert io.Reader) (Signer, error) {
-	// We're going to use the key for signing, but the cert is just for including in the signature block.
-	// Store it as a string.
-	keyPem, err := readPEM(key)
+// NewSigner creates a new Signer with the certificate.
+func NewSigner(cert tls.Certificate) (Signer, error) {
+	c := cert.Certificate[0]
+	parsedCert, err := x509.ParseCertificate(c)
 	if err != nil {
 		return nil, err
 	}
-	privateKey, err := x509.ParsePKCS1PrivateKey(keyPem.Bytes)
-	if err != nil {
-		return nil, err
+	var alg string
+	switch parsedCert.SignatureAlgorithm {
+	case x509.SHA1WithRSA:
+	case x509.SHA256WithRSA:
+		alg = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
+		break
+	case x509.DSAWithSHA1:
+		alg = "http://www.w3.org/2000/09/xmldsig#dsa-sha1"
+		break
+	default:
+		return nil, fmt.Errorf("xmlsig needs some work to support %s certificates", parsedCert.SignatureAlgorithm.String())
 	}
-	// A little bit of unneeded work to decode the cert, but it makes sure the file is good.
-	certPem, err := readPEM(cert)
-	if err != nil {
-		return nil, err
-	}
-	return &signer{base64.StdEncoding.EncodeToString(certPem.Bytes), privateKey}, nil
+	k := cert.PrivateKey.(crypto.Signer)
+	return &signer{base64.StdEncoding.EncodeToString(c), alg, k}, nil
 }
 
-func readPEM(pemReader io.Reader) (*pem.Block, error) {
-	if pemReader == nil {
-		return nil, errors.New("PEM cannot be nil")
-	}
-	pemData, err := ioutil.ReadAll(pemReader)
-	if err != nil {
-		return nil, err
-	}
-	decodedPem, _ := pem.Decode(pemData)
-	if decodedPem == nil {
-		return nil, errors.New("no PEM data found")
-	}
-	return decodedPem, nil
+func (s *signer) Algorithm() string {
+	return s.algorithm
 }
 
-func (s *signer) Sign(data interface{}) (*Signature, error) {
+func (s *signer) CreateSignature(data interface{}) (*Signature, error) {
 	signature := newSignature()
+	signature.SignedInfo.SignatureMethod.Algorithm = s.algorithm
 	// canonicalize the Item
 	canonData, id, err := canonicalize(data)
 	if err != nil {
@@ -77,7 +70,7 @@ func (s *signer) Sign(data interface{}) (*Signature, error) {
 	if err != nil {
 		return nil, err
 	}
-	sig, err := sign(s.key, canonData)
+	sig, err := s.Sign(canonData)
 	if err != nil {
 		return nil, err
 	}
@@ -86,11 +79,11 @@ func (s *signer) Sign(data interface{}) (*Signature, error) {
 	return signature, nil
 }
 
-func sign(key *rsa.PrivateKey, data []byte) (string, error) {
+func (s *signer) Sign(data []byte) (string, error) {
 	h := sha1.New()
 	h.Write(data)
 	sum := h.Sum(nil)
-	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA1, sum)
+	sig, err := s.key.Sign(rand.Reader, sum, crypto.SHA1)
 	if err != nil {
 		return "", err
 	}
@@ -100,7 +93,6 @@ func sign(key *rsa.PrivateKey, data []byte) (string, error) {
 func newSignature() *Signature {
 	signature := &Signature{}
 	signature.SignedInfo.CanonicalizationMethod.Algorithm = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
-	signature.SignedInfo.SignatureMethod.Algorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
 	transforms := &signature.SignedInfo.Reference.Transforms.Transform
 	*transforms = append(*transforms, Algorithm{"http://www.w3.org/2000/09/xmldsig#enveloped-signature"})
 	*transforms = append(*transforms, Algorithm{"http://www.w3.org/2001/10/xml-exc-c14n#"})
