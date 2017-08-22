@@ -1,5 +1,8 @@
-I wrote this to sign XML documents produced by using Go's default XML encoder. It's not capable of signing arbitrary XML. The following example shows how to produce a simple signature.
+= XML Signature library for Golang
 
+I wrote this to sign XML documents produced by using Go's default XML encoder. It's not capable of signing arbitrary XML because canonicalization of external XML is a good bit more work. Despite its limitations is the way to go for most Go programs because you don't have to link to C code or run an external command to create a signature. The following example shows how to produce a simple signature. 
+
+----
 import (
 	"crypto/tls"
 	"encoding/xml"
@@ -36,3 +39,4 @@ type Test1 struct {
 	Data      string   `xml:"urn:envelope Data"`
 	Signature *xmlsig.Signature
 }
+----
