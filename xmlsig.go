@@ -34,10 +34,17 @@ func NewSigner(cert tls.Certificate) (Signer, error) {
 	var alg string
 	switch parsedCert.SignatureAlgorithm {
 	case x509.SHA1WithRSA:
+		fallthrough
 	case x509.SHA256WithRSA:
+		fallthrough
+	case x509.SHA384WithRSA:
+		fallthrough
+	case x509.SHA512WithRSA:
 		alg = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
 		break
 	case x509.DSAWithSHA1:
+		fallthrough
+	case x509.DSAWithSHA256:
 		alg = "http://www.w3.org/2000/09/xmldsig#dsa-sha1"
 		break
 	default:
