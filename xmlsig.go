@@ -82,7 +82,8 @@ func (s *signer) CreateSignature(data interface{}) (*Signature, error) {
 		return nil, err
 	}
 	signature.SignatureValue = sig
-	signature.KeyInfo.X509Data.X509Certificate = s.cert
+	x509Data := &X509Data{X509Certificate: s.cert}
+	signature.KeyInfo.X509Data = x509Data
 	return signature, nil
 }
 
