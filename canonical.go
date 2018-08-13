@@ -19,7 +19,10 @@ func canonicalize(data interface{}) ([]byte, string, error) {
 	var buffer, out bytes.Buffer
 	writer := bufio.NewWriter(&buffer)
 	encoder := xml.NewEncoder(writer)
-	encoder.Encode(data)
+	err := encoder.Encode(data)
+	if err != nil {
+		return nil, "", err
+	}
 	encoder.Flush()
 	// read it back in
 	decoder := xml.NewDecoder(bytes.NewReader(buffer.Bytes()))
